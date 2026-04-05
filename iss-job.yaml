@@ -22,7 +22,7 @@ spec:
                   value: "iss-tracking"
 
                 - name: S3_BUCKET
-                  value: "your-bucket-name"
+                  value: "xsj5rs-project2"
 
                 - name: AWS_REGION
                   value: "us-east-1"
