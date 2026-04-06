@@ -13,38 +13,38 @@ from boto3.dynamodb.conditions import Key
 
 matplotlib.use("Agg")
 
-OPENSKY_URL = "https://opensky-network.org/api/states/all"
-# Continental US bounding box
-PARAMS = {"lamin": 24.7, "lomin": -125.0, "lamax": 49.4, "lomax": -66.9}
+COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
+COINS = ["bitcoin", "ethereum", "solana"]
 
-REGION_ID  = "CONUS"
 TABLE_NAME = os.environ["DYNAMODB_TABLE"]
 S3_BUCKET  = os.environ["S3_BUCKET"]
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 
-def fetch_flights():
-    resp = requests.get(OPENSKY_URL, params=PARAMS, timeout=30)
+def fetch_prices():
+    resp = requests.get(
+        COINGECKO_URL,
+        params={"vs_currency": "usd", "ids": ",".join(COINS)},
+        timeout=15,
+    )
     resp.raise_for_status()
-    states = resp.json().get("states") or []
-
-    airborne   = [s for s in states if not s[8]]
-    altitudes  = [s[7] for s in airborne if s[7] is not None]
-    velocities = [s[9] for s in airborne if s[9] is not None]
-
-    return {
-        "region":         REGION_ID,
-        "timestamp":      datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "aircraft_count": Decimal(str(len(airborne))),
-        "on_ground":      Decimal(str(len(states) - len(airborne))),
-        "avg_altitude_m": Decimal(str(round(sum(altitudes) / len(altitudes), 1))) if altitudes else Decimal("0"),
-        "avg_velocity_ms": Decimal(str(round(sum(velocities) / len(velocities), 2))) if velocities else Decimal("0"),
-    }
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    records = []
+    for coin in resp.json():
+        records.append({
+            "coin_id":   coin["id"],
+            "timestamp": ts,
+            "price_usd": Decimal(str(round(coin["current_price"], 2))),
+            "market_cap": Decimal(str(coin["market_cap"])),
+            "volume_24h": Decimal(str(coin["total_volume"])),
+            "change_24h": Decimal(str(round(coin["price_change_percentage_24h"], 4))),
+        })
+    return records
 
 
-def get_history(table):
+def get_history(table, coin_id):
     items, kwargs = [], dict(
-        KeyConditionExpression=Key("region").eq(REGION_ID),
+        KeyConditionExpression=Key("coin_id").eq(coin_id),
         ScanIndexForward=True,
     )
     while True:
@@ -53,39 +53,46 @@ def get_history(table):
         if "LastEvaluatedKey" not in resp:
             break
         kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-
-    if not items:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(items)
-    df["timestamp"]      = pd.to_datetime(df["timestamp"])
-    df["aircraft_count"] = df["aircraft_count"].astype(int)
-    df["avg_altitude_m"] = df["avg_altitude_m"].astype(float)
-    return df.sort_values("timestamp").reset_index(drop=True)
+    return items
 
 
-def generate_plot(df):
-    if len(df) < 2:
+def generate_plot(table):
+    all_items = []
+    for coin in COINS:
+        all_items.extend(get_history(table, coin))
+
+    if not all_items:
         return None
 
-    sns.set_theme(style="darkgrid", context="talk", font_scale=0.9)
-    fig, ax = plt.subplots(figsize=(14, 6))
+    df = pd.DataFrame(all_items)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["price_usd"] = df["price_usd"].astype(float)
+    df = df.sort_values("timestamp")
 
-    sns.lineplot(data=df, x="timestamp", y="aircraft_count",
-                 ax=ax, color="#4FC3F7", linewidth=2.5)
-    ax.fill_between(df["timestamp"], df["aircraft_count"],
-                    df["aircraft_count"].min() * 0.95,
-                    alpha=0.12, color="#4FC3F7")
+    if df.groupby("coin_id")["timestamp"].count().min() < 2:
+        return None
 
-    ax.set_title(
-        "Airborne Aircraft Over Continental US\n"
+    sns.set_theme(style="darkgrid", context="talk", font_scale=0.85)
+    fig, axes = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
+
+    colors = {"bitcoin": "#F7931A", "ethereum": "#627EEA", "solana": "#9945FF"}
+    labels = {"bitcoin": "Bitcoin (BTC)", "ethereum": "Ethereum (ETH)", "solana": "Solana (SOL)"}
+
+    for ax, coin in zip(axes, COINS):
+        cdf = df[df["coin_id"] == coin]
+        ax.plot(cdf["timestamp"], cdf["price_usd"], color=colors[coin], linewidth=2.5)
+        ax.fill_between(cdf["timestamp"], cdf["price_usd"],
+                        cdf["price_usd"].min() * 0.995, alpha=0.12, color=colors[coin])
+        ax.set_ylabel(f"{labels[coin]}\nPrice (USD)", labelpad=8)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+        sns.despine(ax=ax, top=True, right=True)
+
+    axes[0].set_title(
+        "Crypto Prices Over Time\n"
         f"Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
         fontsize=14, fontweight="bold", pad=14,
     )
-    ax.set_xlabel("Time (UTC)", labelpad=8)
-    ax.set_ylabel("Airborne Aircraft", labelpad=8)
-
-    sns.despine(ax=ax, top=True, right=True)
+    axes[-1].set_xlabel("Time (UTC)", labelpad=8)
     fig.autofmt_xdate(rotation=25, ha="right")
     plt.tight_layout()
 
@@ -93,7 +100,7 @@ def generate_plot(df):
     fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
     buf.seek(0)
     plt.close(fig)
-    return buf
+    return buf, df
 
 
 def push_to_s3(buf, df):
@@ -111,15 +118,14 @@ def main():
     dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
     table    = dynamodb.Table(TABLE_NAME)
 
-    entry = fetch_flights()
-    table.put_item(Item=entry)
+    records = fetch_prices()
+    for record in records:
+        table.put_item(Item=record)
+        print(f"{record['coin_id']} | ${record['price_usd']} | 24h: {record['change_24h']}%")
 
-    print(f"CONUS | aircraft={entry['aircraft_count']} | "
-          f"avg_alt={entry['avg_altitude_m']}m | avg_vel={entry['avg_velocity_ms']}m/s")
-
-    df  = get_history(table)
-    buf = generate_plot(df)
-    if buf:
+    result = generate_plot(table)
+    if result:
+        buf, df = result
         push_to_s3(buf, df)
 
 

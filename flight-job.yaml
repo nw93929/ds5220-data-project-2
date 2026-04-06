@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: flight-tracker
+  name: crypto-tracker
   namespace: default
 spec:
   schedule: "0 * * * *"
@@ -14,12 +14,12 @@ spec:
         spec:
           restartPolicy: OnFailure
           containers:
-            - name: flight-tracker
+            - name: crypto-tracker
               image: ghcr.io/nw93929/ds5220-flights:latest
               imagePullPolicy: Always
               env:
                 - name: DYNAMODB_TABLE
-                  value: "flight-tracking"
+                  value: "crypto-tracking"
                 - name: S3_BUCKET
                   value: "xsj5rs-project2"
                 - name: AWS_REGION
