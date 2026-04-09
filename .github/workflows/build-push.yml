@@ -3,7 +3,7 @@ name: build-push
 on:
   push:
     paths:
-      - 'opensky/**'
+      - 'crypto/**'
   workflow_dispatch:
 
 jobs:
@@ -23,6 +23,6 @@ jobs:
 
       - uses: docker/build-push-action@v5
         with:
-          context: ./opensky
+          context: ./crypto
           push: true
           tags: ghcr.io/nw93929/ds5220-flights:latest
