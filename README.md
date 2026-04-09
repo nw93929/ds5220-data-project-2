@@ -2,6 +2,27 @@
 
 Create, schedule, and run a containerized data pipeline in Kubernetes.
 
+---
+
+## My Data Application — Crypto Price Tracker
+
+### Data Source
+
+This application pulls live cryptocurrency market data from the [CoinGecko public API](https://www.coingecko.com/en/api/documentation). CoinGecko provides free, no-key-required access to real-time prices, market capitalizations, 24-hour trading volume, and price change percentages for thousands of cryptocurrencies. This application tracks three coins: Bitcoin (BTC), Ethereum (ETH), and Solana (SOL).
+
+### Scheduled Process
+
+A Kubernetes CronJob fires once per hour and spawns a containerized Python job (`crypto/app.py`). On each run the job calls the CoinGecko `/coins/markets` endpoint for the three tracked coins, extracts the current USD price, market cap, 24-hour volume, and 24-hour percent change, and writes one DynamoDB record per coin to the `crypto-tracking` table (partition key: `coin_id`, sort key: `timestamp`). It then reads the full history back from DynamoDB, generates an updated plot, and uploads `plot.png` and `data.csv` to the public S3 website bucket, overwriting the previous versions.
+
+### Output Data and Plot
+
+`data.csv` contains one row per coin per hourly run with columns: `coin_id`, `timestamp`, `price_usd`, `market_cap`, `volume_24h`, and `change_24h`. The plot (`plot.png`) is a three-panel time-series chart showing the USD price of each coin over the full collection window. Each panel uses a distinct color per coin and updates on every run, making it easy to observe price movements, volatility, and correlations across the 72-hour window.
+
+- **Plot URL:** http://xsj5rs-project2.s3-website-us-east-1.amazonaws.com/plot.png
+- **Data URL:** http://xsj5rs-project2.s3-website-us-east-1.amazonaws.com/data.csv
+
+---
+
 ## Overview
 
 In this project you will design, containerize, schedule, and operate a real data pipeline running inside a Kubernetes host on AWS. A working sample application is provided that tracks the International Space Station every 15 minutes, records its position and altitude in DynamoDB, and detects orbital burns when the altitude is raised significantly. You will study how that pipeline works, then build your own data application that collects data on a schedule, persists it, and publishes an evolving plot to a public S3 website.
